@@ -2,10 +2,30 @@ import { betterAuth } from "better-auth";
 
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
 const DEVELOPMENT_ALLOWED_HOSTS = ["localhost:*", "127.0.0.1:*"];
+const DEVELOPMENT_PREVIEW_URLS = [
+  process.env.V0_RUNTIME_URL,
+  process.env.V0_DEV_APP_URL,
+  process.env.V0_BUILD_URL,
+  process.env.V0_SANDBOX_URL,
+].filter((url): url is string => Boolean(url));
+const DEVELOPMENT_PREVIEW_ORIGINS = DEVELOPMENT_PREVIEW_URLS.flatMap((url) => {
+  try {
+    return [new URL(url).origin];
+  } catch {
+    return [];
+  }
+});
 
 function getAllowedHosts(): string[] {
   if (process.env.NODE_ENV === "development") {
-    return DEVELOPMENT_ALLOWED_HOSTS;
+    const previewHosts = DEVELOPMENT_PREVIEW_URLS.flatMap((url) => {
+      try {
+        return [new URL(url).host];
+      } catch {
+        return [];
+      }
+    });
+    return Array.from(new Set([...DEVELOPMENT_ALLOWED_HOSTS, ...previewHosts]));
   }
   const deploymentHosts = [
     process.env.VERCEL_URL,
@@ -16,6 +36,15 @@ function getAllowedHosts(): string[] {
     throw new Error("No trusted deployment hosts are configured");
   }
   return Array.from(new Set(deploymentHosts));
+}
+
+function getTrustedOrigins(): string[] {
+  if (process.env.NODE_ENV === "development") {
+    return Array.from(new Set(["http://localhost:3000", ...DEVELOPMENT_PREVIEW_ORIGINS]));
+  }
+  return [process.env.VERCEL_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]
+    .filter((host): host is string => Boolean(host))
+    .map((host) => `https://${host}`);
 }
 
 function requireEnvironmentVariable(name: string): string {
@@ -30,7 +59,18 @@ export const auth = betterAuth({
     allowedHosts: getAllowedHosts(),
     protocol: process.env.NODE_ENV === "development" ? "auto" : "https",
   },
+  trustedOrigins: getTrustedOrigins(),
   secret: requireEnvironmentVariable("BETTER_AUTH_SECRET"),
+  ...(process.env.NODE_ENV === "development"
+    ? {
+        advanced: {
+          defaultCookieAttributes: {
+            sameSite: "none" as const,
+            secure: true,
+          },
+        },
+      }
+    : {}),
   session: {
     expiresIn: SESSION_MAX_AGE_SECONDS,
     disableSessionRefresh: true,
